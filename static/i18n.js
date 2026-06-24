@@ -15808,7 +15808,7 @@ const LOCALES = {
     mcp_tools_no_matches: 'Aucun outil MCP ne correspond à votre recherche.',
     mcp_tools_load_failed: 'Échec du chargement des outils MCP.',
     mcp_tools_schema_empty: 'Aucun paramètre de schéma.',
-    mcp_tools_runtime_note: 'L\'inventaire des outils utilise uniquement les données d\'exécution MCP actives déjà connues ; l\'interface Web ne démarre ni ne sonde les serveurs.',
+    mcp_tools_runtime_note: 'L\'inventaire des outils utilise uniquement les données d\'exécution MCP actives déjà connues ; l\'interface Web pas et ne sonde pas les serveurs.',
     mcp_tools_summary_no_matches: (query,total) => `Aucun outil MCP ne correspond à « ${query} » (${total} outils MCP au total).`,
     mcp_tools_summary_none: 'Aucun outil MCP à afficher.',
     mcp_tools_summary_matching: (query) => ` correspondant à « ${query} »`,
