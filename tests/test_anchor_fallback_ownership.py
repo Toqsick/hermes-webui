@@ -9,9 +9,12 @@ exit before competing with anchor-owned turns.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,8 +41,11 @@ def _phase0_doc() -> str:
 
 
 def _run_node_script(script: str) -> str:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node executable is required for JavaScript behavior checks")
     result = subprocess.run(
-        ["node", "-e", script],
+        [node, "-e", script],
         check=True,
         cwd=ROOT,
         text=True,
