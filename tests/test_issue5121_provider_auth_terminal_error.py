@@ -118,6 +118,18 @@ def _prepare_session(session_id: str, stream_id: str, *, pending_user_message: s
     return session
 
 
+def _seed_prior_turn(session, *, prior_user: str, prior_assistant: str):
+    session.messages = [
+        {"role": "user", "content": prior_user, "timestamp": 1},
+        {"role": "assistant", "content": prior_assistant, "timestamp": 2},
+    ]
+    session.context_messages = [
+        {"role": "user", "content": prior_user},
+        {"role": "assistant", "content": prior_assistant},
+    ]
+    session.save()
+
+
 def _queue_events(fake_queue):
     return [(item[0], item[1]) for item in list(fake_queue.queue)]
 
@@ -222,6 +234,31 @@ def test_auth_401_after_partial_preserves_partial_then_error(tmp_path, monkeypat
     assert apperrors and apperrors[-1]["type"] == "auth_mismatch"
 
 
+def test_auth_401_seeded_multi_turn_partial_persists_error_turn(tmp_path, monkeypatch):
+    session = _prepare_session("auth_seeded_partial", "stream_auth_seeded_partial", pending_user_message="Please stream then fail")
+    _seed_prior_turn(
+        session,
+        prior_user="Earlier question",
+        prior_assistant="Earlier answer",
+    )
+    agent_cls = _build_auth_failure_agent(token_text="Partial auth text")
+
+    fake_queue = _run_stream(monkeypatch, session, "stream_auth_seeded_partial", agent_cls, workspace=str(tmp_path))
+    saved = Session.load("auth_seeded_partial")
+    assert saved is not None
+
+    assert any(msg.get("role") == "assistant" and msg.get("content") == "Earlier answer" for msg in saved.messages)
+    assert any(msg.get("_partial") and msg.get("content") == "Partial auth text" for msg in saved.messages)
+    assert saved.messages[-1]["_error"] is True
+    assert saved.messages[-1]["role"] == "assistant"
+    assert any(msg.get("role") == "user" and msg.get("content") == "Please stream then fail" for msg in saved.messages)
+
+    events = _queue_events(fake_queue)
+    apperrors = [data for event, data in events if event == "apperror"]
+    assert apperrors and apperrors[-1]["type"] == "auth_mismatch"
+    assert not any(event == "done" for event, _ in events)
+
+
 def test_auth_retry_success_does_not_append_error_turn(tmp_path, monkeypatch):
     session = _prepare_session("auth_retry", "stream_auth_retry", pending_user_message="Please retry")
     agent_cls = _build_auth_failure_agent(token_text="")
@@ -308,3 +345,35 @@ def test_non_auth_partial_delivery_persists_error_turn(tmp_path, monkeypatch):
     assert apperrors, "expected apperror for partial silent failure"
     assert apperrors[-1]["type"] == "no_response"
     assert saved.messages[-1]["_error"] is True
+
+
+def test_non_auth_seeded_multi_turn_partial_persists_error_turn(tmp_path, monkeypatch):
+    session = _prepare_session("seeded_partial_escape", "stream_seeded_partial_escape", pending_user_message="Please handle partial silence")
+    _seed_prior_turn(
+        session,
+        prior_user="Earlier question",
+        prior_assistant="Earlier answer",
+    )
+
+    class PartialSilentFailureAgent(MockAgent):
+        def run_conversation(self, **kwargs):
+            if self.stream_delta_callback is not None:
+                self.stream_delta_callback("Partial text before failure")
+            return {
+                "messages": list(kwargs.get("conversation_history") or []),
+                "error": "",
+            }
+
+    fake_queue = _run_stream(monkeypatch, session, "stream_seeded_partial_escape", PartialSilentFailureAgent, workspace=str(tmp_path))
+    saved = Session.load("seeded_partial_escape")
+    assert saved is not None
+
+    assert any(msg.get("role") == "assistant" and msg.get("content") == "Earlier answer" for msg in saved.messages)
+    assert any(msg.get("_partial") and msg.get("content") == "Partial text before failure" for msg in saved.messages)
+    assert saved.messages[-1]["_error"] is True
+
+    events = _queue_events(fake_queue)
+    apperrors = [data for event, data in events if event == "apperror"]
+    assert apperrors, "expected apperror for seeded partial silent failure"
+    assert apperrors[-1]["type"] == "no_response"
+    assert not any(event == "done" for event, _ in events)

@@ -5107,7 +5107,21 @@ def _session_lacks_final_assistant_answer(messages) -> bool:
 
 
 def _merged_transcript_lacks_final_assistant_answer(previous_display, previous_context, result_messages, msg_text, source: str = "webui") -> bool:
-    """Return True when the saved display transcript would still lack a final answer."""
+    """Return True when the current turn still lacks a final assistant answer."""
+    result_messages = list(result_messages or [])
+    previous_context = list(previous_context or [])
+    current_user_idx = _find_current_user_turn(result_messages, msg_text)
+
+    if _messages_have_prefix(result_messages, previous_context):
+        candidates = result_messages[len(previous_context):]
+    elif current_user_idx is not None:
+        candidates = result_messages[current_user_idx + 1:]
+    else:
+        candidates = result_messages
+
+    if _session_lacks_final_assistant_answer(candidates):
+        return True
+
     merged_messages = _merge_display_messages_after_agent_result(
         previous_display,
         previous_context,
