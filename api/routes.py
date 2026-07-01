@@ -13856,6 +13856,13 @@ def handle_post(handler, parsed) -> bool:
                 return bad(handler, "Session not found", 404)
             if cli_meta.get("read_only"):
                 return bad(handler, "Read-only imported sessions cannot be archived from WebUI", 400)
+            # Delegated subagent children (#5307) are view-only and owned by the
+            # delegate runner — never materialize one into a writable WebUI
+            # sidecar via the archive fallback (the 3rd of the shared
+            # import_cli_session write paths).
+            _arch_source_tag = (cli_meta.get("source_tag") or cli_meta.get("raw_source") or "").strip().lower()
+            if _arch_source_tag == "subagent" or _is_subagent_child_session_id(sid):
+                return bad(handler, "Subagent sessions cannot be archived from WebUI", 400)
             if _is_messaging_session_record(cli_meta):
                 s = Session(
                     session_id=sid,
