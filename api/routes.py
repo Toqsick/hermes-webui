@@ -16302,7 +16302,16 @@ _TTS_LOCALHOST_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
 def _tts_addr_is_blocked(ip_str: str) -> bool:
-    """Return True when IP is in a private or otherwise non-routable class."""
+    """Return True when IP is in a private or otherwise non-routable class.
+
+    The explicit flags below document the concrete SSRF-risk classes, but the
+    load-bearing rule is the ``not is_global`` backstop: it blocks every address
+    that is not globally routable — including ranges the named flags miss, most
+    notably ``100.64.0.0/10`` (RFC 6598 CGNAT, also Tailscale's default address
+    space), the ``198.18.0.0/15`` benchmarking range, and any future
+    non-global allocation — so a rebinding host cannot reach a victim's tailnet
+    or carrier-NAT peer.
+    """
     import ipaddress
 
     try:
@@ -16310,7 +16319,8 @@ def _tts_addr_is_blocked(ip_str: str) -> bool:
     except ValueError:
         return False
     return (
-        ip.is_private
+        not ip.is_global
+        or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_reserved

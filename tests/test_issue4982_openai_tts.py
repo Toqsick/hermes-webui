@@ -201,6 +201,33 @@ def test_tts_resolve_pinned_address_rejects_blocked_target(monkeypatch):
         routes._tts_resolve_pinned_address("public.example.com")
 
 
+def test_tts_addr_is_blocked_covers_non_global_ranges():
+    # The `not is_global` backstop must block ranges the named private/loopback/
+    # link-local flags miss — most importantly RFC 6598 CGNAT (100.64.0.0/10,
+    # also Tailscale's default space) so a rebinding host can't reach a victim's
+    # tailnet/carrier-NAT peer — while genuine public addresses stay allowed.
+    assert routes._tts_addr_is_blocked("100.64.0.1") is True   # CGNAT / Tailscale
+    assert routes._tts_addr_is_blocked("100.127.255.254") is True  # CGNAT upper edge
+    assert routes._tts_addr_is_blocked("198.18.0.1") is True   # benchmarking (RFC 2544)
+    assert routes._tts_addr_is_blocked("192.0.2.5") is True    # TEST-NET-1 (docs, non-global)
+    # Real public addresses still pass through:
+    assert routes._tts_addr_is_blocked("1.1.1.1") is False
+    assert routes._tts_addr_is_blocked("8.8.8.8") is False
+    assert routes._tts_addr_is_blocked("140.82.112.3") is False  # github.com range
+    # 203.0.113.0/24 is TEST-NET-3 (documentation, non-global) -> blocked too:
+    assert routes._tts_addr_is_blocked("203.0.113.10") is True
+
+
+def test_tts_resolve_pinned_address_rejects_cgnat_rebind_target(monkeypatch):
+    # A host that resolves into the CGNAT/Tailscale range must be rejected at
+    # pinning time (regression for the 100.64.0.0/10 blocklist gap).
+    def _fake_getaddrinfo(*_args, **_kwargs):
+        return [(0, 0, 0, "", ("100.64.12.34", 0))]
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
+    with pytest.raises(ValueError, match="not allowed"):
+        routes._tts_resolve_pinned_address("tailnet-rebind.example.com")
+
+
 def test_tts_resolve_pinned_address_rejects_mixed_addresses(monkeypatch):
     def _fake_getaddrinfo(*_args, **_kwargs):
         return [
