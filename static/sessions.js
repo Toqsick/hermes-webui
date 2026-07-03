@@ -4346,32 +4346,24 @@ function _syncSessionAttentionSoundState(sessions){
   next.forEach((sig,sid)=>_sessionAttentionSoundState.set(sid,sig));
 }
 
-// Signature of everything the sidebar render reads from the applied payload +
-// the coarse display state. Used to skip the full DOM rebuild when a poll
-// returns data identical to what is already on screen (the common idle case).
-// A streaming row's fields advance each poll so its signature changes and it
-// still renders; client-only display toggles (search, active, density, select,
-// lineage expansion) render through their own paths and are intentionally light
-// here. Serialization failure returns null → never skip. (#5455 WS2.4)
+// Signature of everything the sidebar render reads. Used to skip the full DOM
+// rebuild when a poll returns data identical to what is already on screen (the
+// common idle case). We serialize the FULL applied row objects (not a curated
+// field subset) plus the reference/nesting rows and the coarse display state, so
+// ANY server- or client-visible field the render helpers read (streaming/pending
+// state, attention dots, source/read-only/worktree/lineage/child/model/profile
+// meta, etc.) is covered — a narrow allowlist silently false-skips the moment a
+// new rendered field is added (Codex #5467 gate: it omitted pending/running,
+// attention, and the source/lineage cluster). A streaming/pending row's fields
+// advance each poll so its signature changes and it still renders. Serialization
+// failure returns null → never skip (fail-open). (#5455 WS2.4)
 let _lastSessionListRenderSig = null;
 function _sessionListRenderSignature(){
   try{
     const search=($('sessionSearch')&&$('sessionSearch').value)||'';
-    const sessionKeys = [
-      'session_id','id','display_name','title','created_at','started_at',
-      'updated_at','last_message_at','last_activity','message_count',
-      'actual_message_count','is_streaming','streaming','status','pinned',
-      'archived','project_id','source','session_source','generation',
-      '_lineage_root_id','_lineage_tip_id','_compression_segment_count',
-    ];
-    const sessionsSlim = Array.isArray(_allSessions) ? _allSessions.map(s => {
-      if(!s || typeof s !== 'object') return s;
-      const out={};
-      sessionKeys.forEach(k=>{ if(Object.prototype.hasOwnProperty.call(s,k)) out[k]=s[k]; });
-      return out;
-    }) : _allSessions;
     return JSON.stringify([
-      sessionsSlim,
+      _allSessions,
+      _sidebarReferenceSessions,
       _allProjects,
       _activeSessionIdForSidebar(),
       search,
