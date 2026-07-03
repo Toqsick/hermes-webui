@@ -296,6 +296,9 @@ def test_boot_mirrors_server_settings_before_tts_apply_and_preserves_failure_fal
 
 def test_persisted_speech_key_metadata_controls_boot_and_panel_precedence():
     mirror_fn = _extract_balanced_block(BOOT_JS, "function _mirrorSpeechSettingsFromServer")
+    speech_helpers_start = PANELS_JS.index("const _SETTINGS_SPEECH_STORAGE_KEYS=")
+    speech_helpers_end = PANELS_JS.index("function _preferencesPayloadFromUi", speech_helpers_start)
+    speech_helpers_block = PANELS_JS[speech_helpers_start:speech_helpers_end].strip()
     speech_setting_start = PANELS_JS.index("const persistedSpeechKeys = new Set(")
     speech_setting_end = PANELS_JS.index("const _speechBool=function", speech_setting_start)
     speech_setting_block = PANELS_JS[speech_setting_start:speech_setting_end].strip()
@@ -314,6 +317,7 @@ const localStorage = {{
   }},
 }};
 const window = {{}};
+{speech_helpers_block}
 {mirror_fn}
 _mirrorSpeechSettingsFromServer({{tts_enabled: false, tts_pitch: 1, persisted_speech_keys: []}});
 assert.strictEqual(localStorage.getItem('hermes-tts-enabled'), 'true');
@@ -340,6 +344,60 @@ assert.strictEqual(localStorage.getItem('hermes-tts-pitch'), '1');
     subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
 
 
+def test_settings_panel_speech_payload_is_sparse_by_ownership():
+    speech_helpers_start = PANELS_JS.index("const _SETTINGS_SPEECH_STORAGE_KEYS=")
+    speech_helpers_end = PANELS_JS.index("function _setPreferencesAutosaveStatus", speech_helpers_start)
+    speech_helpers_block = PANELS_JS[speech_helpers_start:speech_helpers_end].strip()
+    script = f"""
+const assert = require('assert');
+const localStorage = {{
+  store: new Map(),
+  getItem(key) {{
+    return this.store.has(key) ? this.store.get(key) : null;
+  }},
+  setItem(key, value) {{
+    this.store.set(key, String(value));
+  }},
+  clear() {{
+    this.store.clear();
+  }},
+}};
+const controls = {{
+  settingsTtsEnabled: {{checked: false}},
+  settingsTtsAutoRead: {{checked: false}},
+  settingsTtsEngine: {{value: 'browser'}},
+  settingsTtsVoice: {{value: ''}},
+  settingsTtsRate: {{value: '1'}},
+  settingsTtsPitch: {{value: '1'}},
+  settingsVoiceModeEnabled: {{checked: false}},
+  settingsRawAudio: {{checked: false}},
+}};
+function $(id) {{ return controls[id] || null; }}
+{speech_helpers_block}
+_captureSpeechPreferenceOwnership({{persisted_speech_keys: []}});
+assert.deepStrictEqual(_speechPreferencesPayloadFromUi(), {{}});
+
+_captureSpeechPreferenceOwnership({{persisted_speech_keys: ['tts_enabled']}});
+assert.deepStrictEqual(_speechPreferencesPayloadFromUi(), {{tts_enabled: false}});
+
+localStorage.clear();
+localStorage.setItem('hermes-tts-pitch', '0.8');
+controls.settingsTtsPitch.value = '0.8';
+_captureSpeechPreferenceOwnership({{persisted_speech_keys: []}});
+assert.deepStrictEqual(_speechPreferencesPayloadFromUi(), {{tts_pitch: 0.8}});
+
+localStorage.clear();
+controls.settingsTtsRate.value = '1.4';
+_captureSpeechPreferenceOwnership({{persisted_speech_keys: []}});
+_markSpeechPreferenceChanged('tts_rate');
+assert.deepStrictEqual(_speechPreferencesPayloadFromUi(), {{tts_rate: 1.4}});
+"""
+
+    import subprocess
+
+    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+
+
 def test_settings_panel_persists_speech_fields_and_keeps_immediate_cache_writes():
     payload_idx = PANELS_JS.index("function _preferencesPayloadFromUi")
     payload_end = PANELS_JS.index("function _setPreferencesAutosaveStatus", payload_idx)
@@ -349,7 +407,7 @@ def test_settings_panel_persists_speech_fields_and_keeps_immediate_cache_writes(
     panel_block = PANELS_JS[panel_idx:panel_end]
 
     for field in SPEECH_DEFAULTS:
-        assert f"payload.{field}=" in payload_block
+        assert f"_setOwnedSpeechPayload(payload,'{field}'" in payload_block
     for storage_key in [
         "hermes-tts-enabled",
         "hermes-tts-auto-read",
@@ -370,6 +428,11 @@ def test_settings_panel_persists_speech_fields_and_keeps_immediate_cache_writes(
     assert "ttsRateSlider.value=(savedRate===null||savedRate===undefined)?'1':String(savedRate)" in panel_block
     assert "ttsPitchSlider.value=(savedPitch===null||savedPitch===undefined)?'1':String(savedPitch)" in panel_block
     assert "if(settings&&persistedSpeechKeys.has(key)) return settings[key];" in PANELS_JS
+    assert "function _captureSpeechPreferenceOwnership(settings)" in PANELS_JS
+    assert "function _speechPreferenceIsOwned(settingKey)" in PANELS_JS
+    assert "_markSpeechPreferenceChanged('tts_rate')" in panel_block
+    assert "_syncSpeechPreferenceCache('tts_rate',ttsRateSlider.value)" in panel_block
+    assert "_syncSpeechPreferenceCache('tts_pitch',ttsPitchSlider.value)" in panel_block
     assert "Object.assign(payload,_speechPreferencesPayloadFromUi());" in payload_block
     assert "Object.assign(body,_speechPreferencesPayloadFromUi());" in PANELS_JS
     assert "_schedulePreferencesAutosave()" in panel_block
