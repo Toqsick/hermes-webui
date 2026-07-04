@@ -2541,6 +2541,31 @@ def resolve_model_provider(model_id: str) -> tuple:
             m.get('id', '') for m in _PROVIDER_MODELS[_canon_config_provider]
             if isinstance(m, dict) and isinstance(m.get('id'), str)
         }
+    # The active provider may be defined ENTIRELY via config.yaml `providers:`
+    # (no static _PROVIDER_MODELS entry) with its own `models:` allowlist. Fold
+    # that allowlist into the ownership set too, so the active provider owns its
+    # own declared models and can't be hijacked by another providers.<slug>
+    # entry that happens to list the same bare id earlier in config order (#5511).
+    if _canon_config_provider:
+        _providers_cfg_own = cfg.get('providers', {})
+        if isinstance(_providers_cfg_own, dict):
+            for _slug, _pdef in _providers_cfg_own.items():
+                if not isinstance(_pdef, dict):
+                    continue
+                if _canonicalise_provider_id(_slug) != _canon_config_provider:
+                    continue
+                if _canon_config_provider == "copilot":
+                    continue  # copilot.models is a settings map, not an allowlist
+                _own_models = _pdef.get('models')
+                if isinstance(_own_models, list):
+                    for _m in _own_models:
+                        _mid = str(_m.get('id') or '') if isinstance(_m, dict) else str(_m or '')
+                        if _mid.strip():
+                            _provider_models_set.add(_mid.strip())
+                elif isinstance(_own_models, dict):
+                    _provider_models_set.update(
+                        str(k).strip() for k in _own_models if isinstance(k, str) and str(k).strip()
+                    )
     _skip_custom_providers = (
         _is_explicit_non_custom_provider
         and (

@@ -897,3 +897,25 @@ def test_providers_scan_ownership_guard_canonicalises_gemini_alias_5511():
         "aliased active Gemini provider that owns the model must not be hijacked "
         f"by providers.openai.models; got {provider!r}"
     )
+
+
+def test_providers_scan_active_own_providers_entry_owns_over_other_slug_5511():
+    """An active provider defined purely via config.yaml `providers:` (no static
+    catalog entry) owns the models in its OWN providers.<active>.models allowlist,
+    so another provider's entry listing the same bare id (even earlier in config
+    order) must NOT hijack it (#5511 gate finding 5)."""
+    # 'openai' entry lists gpt-x first, but the ACTIVE provider (myprov) also
+    # declares gpt-x in its own providers.myprov.models — active must win.
+    model, provider, base_url = _resolve_with_providers(
+        'gpt-x',
+        {
+            'openai': {'models': ['gpt-x']},
+            'myprov': {'base_url': 'https://my.example/v1', 'models': ['gpt-x']},
+        },
+        provider='myprov',
+    )
+    assert provider == 'myprov', (
+        "active provider's own providers: allowlist must own its model over "
+        f"another slug's overlapping entry; got {provider!r}"
+    )
+    assert base_url == 'https://my.example/v1'
