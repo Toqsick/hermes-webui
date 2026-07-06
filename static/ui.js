@@ -1003,6 +1003,11 @@ function _isTouchLikeMessageViewport(el){
   try{
     if(typeof matchMedia==='function' && matchMedia('(pointer:coarse)').matches) return true;
   }catch(_){}
+  // Best-effort fallback for the (today essentially non-existent) no-matchMedia
+  // environment: the computed-anchor probe can transiently read 'none' during a
+  // realign burst (see comment above), so on such a touch device this could
+  // re-admit the original yank. matchMedia('(pointer:coarse)') is universally
+  // supported in every browser this UI targets, so the primary path is what runs.
   return _browserOverflowAnchorActive(el);
 }
 function _suppressBrowserOverflowAnchor(container){

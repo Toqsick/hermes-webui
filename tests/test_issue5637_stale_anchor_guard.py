@@ -269,3 +269,70 @@ def test_fallback_allows_snapshot_top_on_desktop_no_native_anchor():
     assert m["writes"] == [89577]
     assert m["messageUserUnpinned"] is False and m["scrollPinned"] is True
 
+
+# ---- predicate stability (_isTouchLikeMessageViewport) ---------------------------
+
+def _predicate_harness(*, pointer_coarse, computed_overflow_anchor, has_matchmedia=True,
+                       inline_overflow_anchor="") -> str:
+    """Exercise the REAL _isTouchLikeMessageViewport + _browserOverflowAnchorActive
+    against a fake element, mocking matchMedia and getComputedStyle. `inline_overflow_anchor`
+    simulates the inline `overflowAnchor:'none'` that _restoreMessageViewportAnchor writes
+    on #messages mid-realign — the value the computed probe would transiently read."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    mm = "true" if pointer_coarse else "false"
+    has_mm = "true" if has_matchmedia else "false"
+    return _extract_func_script(js) + f"""
+const HAS_MM = {has_mm};
+if (HAS_MM) {{
+  globalThis.matchMedia = function(q){{ return {{ matches: (q === '(pointer:coarse)') ? {mm} : false }}; }};
+}} else {{
+  globalThis.matchMedia = undefined;
+}}
+// getComputedStyle reflects the INLINE override first (as a real browser would during
+// a realign burst), else the resting computed value.
+const el = {{ style: {{ overflowAnchor: {json.dumps(inline_overflow_anchor)} }} }};
+globalThis.getComputedStyle = function(node){{
+  const inline = node && node.style && node.style.overflowAnchor;
+  return {{ overflowAnchor: inline || {json.dumps(computed_overflow_anchor)} }};
+}};
+eval(extractFunc('_browserOverflowAnchorActive'));
+eval(extractFunc('_isTouchLikeMessageViewport'));
+console.log(JSON.stringify({{ touchLike: _isTouchLikeMessageViewport(el) }}));
+"""
+
+
+def test_predicate_stays_true_on_touch_when_inline_anchor_clobbered_to_none():
+    """The claim that motivated choosing matchMedia over the computed probe: on a touch
+    device, when a prior realign tick has clobbered the inline `overflowAnchor` to 'none'
+    on #messages (its own scroll-write side effect, restored next frame), the predicate
+    MUST still report touch=true so the hold gate stays engaged across a realign burst.
+    matchMedia('(pointer:coarse)') reflects the input device and can't be mutated by that
+    inline write.
+    Mutation: revert _isTouchLikeMessageViewport to `return _browserOverflowAnchorActive(el)`
+    (the computed probe alone) and this FAILS — the probe reads the inline 'none' and
+    misclassifies the touch device as desktop."""
+    m = json.loads(_run_node(_predicate_harness(
+        pointer_coarse=True, computed_overflow_anchor="auto",
+        inline_overflow_anchor="none",
+    )))
+    assert m["touchLike"] is True
+
+
+def test_predicate_false_on_desktop_fine_pointer():
+    """Desktop (fine pointer): matchMedia('(pointer:coarse)') is false and the resting
+    computed overflow-anchor is 'none' -> predicate reports NOT touch, so the guards do
+    not fire and desktop keeps its scroll restore."""
+    m = json.loads(_run_node(_predicate_harness(
+        pointer_coarse=False, computed_overflow_anchor="none",
+    )))
+    assert m["touchLike"] is False
+
+
+def test_predicate_falls_back_to_computed_probe_without_matchmedia():
+    """Best-effort fallback: with no matchMedia available, the predicate uses the computed
+    overflow-anchor probe. A resting 'auto' (touch) -> true."""
+    m = json.loads(_run_node(_predicate_harness(
+        pointer_coarse=True, computed_overflow_anchor="auto", has_matchmedia=False,
+    )))
+    assert m["touchLike"] is True
+
