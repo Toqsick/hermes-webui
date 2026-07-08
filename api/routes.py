@@ -6262,6 +6262,15 @@ def _read_profile_model_config(
     does not override the session provider. ``profile_default_model`` is still
     returned for suffix repair (#5127) only when the profile's configured
     provider matches ``requested_provider`` after normalization.
+
+    perf(webui/session-load-latency) tier2a: the parse is wrapped in a
+    per-process LRU keyed by (profile_name, config_mtime, size). The
+    function fires on every chat-open for sessions under a named
+    profile (resolve_model=1 path), and the YAML parse alone is
+    hundreds of µs to single-digit ms on the Chromebook. Cache TTL
+    60s is a backstop in case mtime resolution is poor on a given
+    filesystem; under normal edits the mtime changes and invalidates
+    immediately.
     """
     if not getattr(session, "profile", None):
         return None, None, None
@@ -6269,15 +6278,13 @@ def _read_profile_model_config(
     try:
         from api.profiles import get_hermes_home_for_profile
 
-        _profile_home = get_hermes_home_for_profile(session.profile)
+        _profile_name = str(getattr(session, "profile") or "")
+        _profile_home = get_hermes_home_for_profile(_profile_name)
         _profile_cfg_path = os.path.join(str(_profile_home), "config.yaml")
         if not os.path.isfile(_profile_cfg_path):
             return None, None, None
-        import yaml
-
-        with open(_profile_cfg_path, encoding="utf-8") as _f:
-            _pcfg = yaml.safe_load(_f) or {}
-        if not isinstance(_pcfg, dict):
+        _pcfg = _read_profile_config_cached(_profile_name, _profile_cfg_path)
+        if _pcfg is None:
             return None, None, None
         _model_cfg = _pcfg.get("model") or {}
         if not isinstance(_model_cfg, dict):
@@ -6299,6 +6306,54 @@ def _read_profile_model_config(
             return None, None, _pcfg
         return None, _default, _pcfg
     return _provider, _default, _pcfg
+
+
+# perf(webui/session-load-latency) tier2a: process-wide cache for parsed
+# profile config.yaml. Key = (profile_name, mtime, size); value = parsed
+# dict. mtime+size auto-invalidates on edit; a 60s TTL is the backstop
+# in case of coarse mtime resolution (some network filesystems round
+# mtime to whole seconds — the size guard catches a write of equal-length
+# bytes within the same second). Reads are guarded by a single Lock to
+# keep the hot path simple; the underlying yaml.safe_load is the slow
+# step, not the lock, so contention is bounded.
+_PROFILE_CONFIG_CACHE: "dict[tuple, tuple[float, dict]]" = {}
+_PROFILE_CONFIG_CACHE_TTL_SECONDS = 60.0
+_PROFILE_CONFIG_CACHE_LOCK = threading.Lock()
+
+
+def _read_profile_config_cached(profile_name: str, cfg_path: str) -> dict | None:
+    """Return parsed profile config, caching by (mtime, size) with TTL backstop."""
+    try:
+        st = os.stat(cfg_path)
+    except OSError:
+        return None
+    mtime = float(getattr(st, "st_mtime", 0.0) or 0.0)
+    size = int(getattr(st, "st_size", 0) or 0)
+    key = (str(profile_name or ""), mtime, size)
+    now = time.monotonic()
+    with _PROFILE_CONFIG_CACHE_LOCK:
+        cached = _PROFILE_CONFIG_CACHE.get(key)
+        if cached is not None:
+            cached_at, cached_dict = cached
+            if (now - cached_at) <= _PROFILE_CONFIG_CACHE_TTL_SECONDS:
+                return cached_dict
+    import yaml
+    try:
+        with open(cfg_path, encoding="utf-8") as _f:
+            parsed = yaml.safe_load(_f) or {}
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    with _PROFILE_CONFIG_CACHE_LOCK:
+        _PROFILE_CONFIG_CACHE[key] = (now, parsed)
+        # Cap the cache at 32 entries; profiles are bounded in practice
+        # and unbounded growth would be a leak.
+        if len(_PROFILE_CONFIG_CACHE) > 32:
+            # Drop the oldest entry by insertion order (dict is ordered).
+            for old_key in list(_PROFILE_CONFIG_CACHE.keys())[:max(0, len(_PROFILE_CONFIG_CACHE) - 32)]:
+                _PROFILE_CONFIG_CACHE.pop(old_key, None)
+    return parsed
 
 
 def _load_profile_config_dict(session) -> dict | None:
