@@ -41,6 +41,20 @@ def test_dashboard_loader_and_poll_lifecycle_exist():
     ), "missing dashboard leave-cleanup in switchPanel"
 
 
+def test_dashboard_loader_bails_when_navigated_away():
+    # Rapid sidebar clicks: the 7-endpoint fetch batch may resolve after the
+    # user has already moved to another panel. The loader must bail before
+    # rendering (main-thread thrash into a hidden view) and before starting the
+    # poll timer (which would leak past switchPanel's leave-cleanup).
+    m = re.search(r"async function loadDashboard.*?\n\}\n", PANELS_JS, re.DOTALL)
+    assert m, "loadDashboard body not found"
+    body = m.group(0)
+    guard = body.find("_currentPanel !== 'dashboard'")
+    assert guard != -1, "missing stale-load guard in loadDashboard"
+    assert guard < body.index("_renderDashboard(box"), "guard must precede render"
+    assert guard < body.index("_dashboardStartPolling();"), "guard must precede poll start"
+
+
 def test_dashboard_markup_is_present():
     assert 'id="panelDashboard"' in INDEX_HTML
     assert 'id="mainDashboard"' in INDEX_HTML
