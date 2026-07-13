@@ -4432,6 +4432,13 @@ async function loadDashboard(animate) {
       api('/api/logs?file=agent&tail=100').catch(() => null),
       api('/api/memory').catch(() => null),
     ]);
+    // The fetch batch is heavy (7 endpoints); if the user has already clicked
+    // away to another panel while it was in flight, skip the render and polling
+    // start entirely. Rendering into a hidden view just thrashes the main thread
+    // during rapid sidebar clicks, and a late _dashboardStartPolling() here would
+    // leak a timer past the switchPanel leave-cleanup. Mirrors the kanban/logs
+    // "_currentPanel !== '…'" bail-outs.
+    if (_currentPanel !== 'dashboard') return;
     _dashMemoryData = memory;
     if (!insights && !health && !logs) {
       box.innerHTML = `<div style="color:var(--accent);font-size:12px">${esc(t('error_prefix') + t('dashboard_unavailable'))}</div>`;
